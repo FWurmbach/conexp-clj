@@ -14,558 +14,927 @@
   (object-factor [this] object-factor)
   (attribute-factor [this] attribute-factor))
 
-(defn- unite
-"Unite-Operator for 2 matrices"
-  [A B]
-  (loop [i 0 C []]
-    (if (>= i (count A))
-      C
-      (recur
-        (inc i)
-        (conj C (into [] (map (fn [x y] (if (or (= 1 x) (= 1 y)) 1 0)) (get A i) (get B i))))))))
-
-(defn- make-object-helper
-  "Helper function for make-object"
-  [concept m k j]
-  (loop [i 0 a []]
-    (if (<= m i)
-      a
-      (recur 
-        (inc i)
-        (cond (some #(= i %) (get (get concept j) 0))
-              (conj a 1) :else (conj a 0))))))
-
-(defn- make-object
-  "Creates Object Factorization Context from a given Concept given by Grecond & Greess Algo"
-  [concept m k]
-  (loop [i 0 out []]
-    (if (<= k i)
-      (make-context-from-matrix m k (into [](flatten (apply mapv vector out))))
-      (recur
-        (inc i)
-        (conj out (make-object-helper concept m k i))))))
-
-(defn- make-attribute
-  "Creates Attribute Factorization Context from a given Concept given by Grecond & Greess Algo"
-  [concept n k]
-  (loop [i 0 j 0 out []]
-    (if (<= k j)
-      (make-context-from-matrix k n out)
-      (recur
-        (cond (>= i (- n 1)) 0 :else (inc i)) 
-        (cond (>= i (- n 1)) (inc j) :else j)
-        (cond (some #(= i %) (get (get concept j) 1))
-              (conj out 1) :else (conj out 0))))))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; https://doi.org/10.1137/1.9781611972801.15;
+;; helper functions
 
-(defn- calc-one-matrix
-  "Calculates Matrix with 2 vectors"
-    [A B]
-    (into []
-      (let [X []]
-        (for [a A]
-         (into X (for [b B] (if (and (= a 1) (= b 1)) 1 0)))))))    
-  
-(defn- calc-panda-context
-  "Creates Context from panda-algo result vectors"
-  [pi]
-  (loop [i 0 end (calc-one-matrix (get (nth pi i) :ci) (get (nth pi i) :ct))]
-    (if (>= i (count pi))
-      (make-context-from-matrix  (count (get (nth pi 0) :ci)) (count (get (nth pi 0) :ct)) (into [] (flatten end)))
-      (recur
-        (inc i) 
-        (unite end (calc-one-matrix (get (nth pi i) :ci) (get (nth pi i) :ct)))))))
-
-(defn- create-new-d
-"Returns new Matrix D from Input Matrix to adjust form already calculated vectors"
-  [C Dr]
-  (loop [i 0 A []]
-    (if (>= i (count C))
-      A
-      (recur 
-        (inc i)
-        (conj A (into [] (map (fn [x y] (if (and (= 1 x) (= 1 y)) 0 y)) (get C i) (get Dr i))))))))
-
-(defn- sort-items
-"Returns sorted list S"
-  [cur-D]  
-  (loop [i 0 
-         item (get cur-D 0)
-         S (hash-map)]
-    (if (>= i (count cur-D))
-      S
-      (recur 
-        (inc i)
-        (get cur-D (inc i))
-        (assoc S i (cond (nil? (get (frequencies item) 1)) 0  :else (get (frequencies item) 1)))))))
-
-(defn- create-new-ct
-"Creates new Vector to loop over"
-  [Ct Dr]
-  (let [Cts []]
-    (into Cts
-      (for [i (range (count Ct))]
-        (if (= 0 (get Dr i)) 0 (get Ct i))))))
-
-(defn- count-one
-"Returns count of 1's in Matrix"
-  [V]
-  (loop [i 0 c 0]
-     (if (> i (count V))
-      c
-      (recur 
-        (inc i)
-        (cond (= (get V i) 1) (inc c) :else c)))))
-
-(defn count-false-ones
-  "Returns count of how many false 1's are in the Matrix"
-  [V D]
-  (loop [i 0 j 0 c 0]
-    (if (>= i (count V))
-      c
-      (recur
-         (cond (> j (count (get V 0))) (inc i) :else i)
-         (cond (> j (count (get V 0))) 0 :else (inc j))
-         (cond (not= (get (get V i) j) (get (get D i) j)) (inc c) :else c)))))
-
-(defn- weight-core
-  "Weight function to determine if found Core is better, additionally adds list sh to the new core"
-  [C CS sh D]
-  (let [count-onesCS (+ (+ (count-one (get CS :ci)) (count-one (get CS :ct)))
-                       (count-false-ones (calc-one-matrix (get CS :ci) (get CS :ct)) D))
-        count-onesC (+ (+ (count-one (get C :ci)) (count-one (get C :ct)))
-                      (count-false-ones (calc-one-matrix (get C :ci) (get C :ct)) D))]
-    (if (<= count-onesCS count-onesC) CS (update C :e conj sh))))
-
-(defn- weight
-  "Weight function to determine if found Core is better"
-  [C CS D]
-  (let [count-onesCS (+ (+ (count-one (get CS :ci)) (count-one (get CS :ct)))
-                       (count-false-ones (calc-one-matrix (get CS :ci) (get CS :ct)) D))
-        count-onesC (+ (+ (count-one (get C :ci)) (count-one (get C :ct))) 
-                      (count-false-ones (calc-one-matrix (get C :ci) (get C :ct)) D))]
-    (if (<= count-onesCS count-onesC) CS C)))
-
-(defn- find-core-loop
-  "Loops to find new Cores"
-  [S C newD]
-  (loop [CiS (assoc (get C :ci) (get (nth S 1) 0) 1)
-         CtS (create-new-ct (get C :ct) (get newD (get (nth S 1) 0)))
-         CS C
-         i 1]
-    (if (>= i (count S))
-      CS
-      (recur
-        (assoc (get CS :ci) (get (nth S i) 0) 1)
-        (create-new-ct (get CS :ct) (get newD (get (nth S i) 0)))
-        (weight-core CS {:ci (assoc (get CS :ci) (get (nth S i) 0) 1)
-                        :ct (create-new-ct (get CS :ct) (get newD (get (nth S i) 0)))
-                        :e (get CS :e)} 
-                       (get (nth S i) 0) newD)
-        (inc i)))))
-
-(defn- find-core
-  "finds a core and returns new D"
-  [cur-D]
-  (let [S (sort-by val > (sort-items cur-D))
-        C {:ci (assoc (vec (repeat (count cur-D) 0)) (first (first S)) 1)
-           :ct (get cur-D (first (first S)))
-           :e (list)}]
-    (find-core-loop S C cur-D)))
-
-(defn- new-transactions
-  "Helper function for 'extend-core'"
-  [C pi D]
-  (loop [i 0 CS C]
-    (if (<= (count (get C :ct)) i)
-      CS
-      (recur
-        (inc i)
-        (weight CS {:ci (get CS :ci) :ct (assoc (get CS :ct) i 1)} D)))))
-
-(defn- extend-core
-  "extend-cores with noise"
-  [C pi D]
-  (let [E (get C :e)]
-    (loop [i 0 item (nth E 0) CS C]
-      (if (<= (count E) i)
-        CS
-        (recur 
-          (inc i)
-          (nth E i)
-          (new-transactions (weight CS {:ci (assoc (get CS :ci) item 1) :ct (get CS :ct)}
-                                      D)
-                            pi
-                            D))))))
-
-(defn- panda-factorization-matrices
-  "Creates Object/Attribute Factorization from panda algo"
-  [x n m k]
-  (loop [i 0 cio [] cto[]]
-    (if (<= k i)
-      [(calc-panda-context x)
-       (make-context-from-matrix n k (into [](flatten (apply mapv vector cio))))
-       (make-context-from-matrix k m (into [](flatten cto)))]
-      (recur 
-        (inc i) 
-        (conj cio (get (nth x i) :ci))
-        (conj cto (get (nth x i) :ct))))))
-
-(defn panda
-  "Greedy Algorithm which searches for tupel (A,B) which cover the most incidences based on their derivation"
-  [input k]
-  (let [D (make-matrix-from-context (context-to-string input))]
-    (loop [i 0 pi (list) cur-D D]
-      (if (<= k i)
-        (panda-factorization-matrices pi (count (get (nth pi 0) :ci)) (count (get (nth pi 0) :ct)) k)
-        (recur 
-          (inc i)
-          (conj pi (extend-core (find-core cur-D) pi cur-D))
-          (create-new-d (calc-one-matrix (get (extend-core (find-core cur-D) pi cur-D) :ci) 
-                                     (get (extend-core (find-core cur-D) pi cur-D) :ct))
-                      cur-D))))))
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; grecond
-;; https://doi.org/10.1016/j.jcss.2009.05.002
-
-(defn grecond-make-matrix-from-concept
-  "Creates Grecond Matrix when given concepts"
+(defn make-matrix-from-concept
   [a b n m]
+  ;; make matrix from concept a&b with n m 
   (loop [i 0 j 0 matrix []]
-    (if (> j (- m 1))
-    matrix
-      (recur 
-        (cond (>= i (- n 1)) 0 :else (inc i)) 
-        (cond (>= i (- n 1)) (inc j) :else j)
-        (cond (and (some #(= j %) a) (some #(= i %) b)) (conj matrix 1) :else (conj matrix 0))))))
-
-(defn- calc-grecond-context
-  "Creates Context from grecond-algo result vectors"
-  [F m n]
-  (loop [i 1 
-         end (grecond-make-matrix-from-concept (nth (nth F 0) 0) (nth (nth F 0) 1) n m)]
-    (if (>= i (count F))
-      (make-context-from-matrix m n end)
+    (if (> (inc j) n)
+      matrix
       (recur
-        (inc i)
-        (mapv (fn [x y] (if (or (= 1 x) (= 1 y)) 1 0))
-              (grecond-make-matrix-from-concept (nth (nth F i) 0) (nth (nth F i) 1) n m) end)))))
+       (cond (>= (inc i) m) 0 :else (inc i))
+       (cond (>= (inc i) m) (inc j) :else j)
+       (cond (and
+              (some #(= j %) a)
+              (some #(= i %) b))
+             (conj matrix 1) :else (conj matrix 0))))))
 
-(defn- grecond-match
-  "Tests how much the chosen concept is covering"
-  [A U]
-  (loop [i 0 c 0 u U]
-    (if (>= i (count A))
-      {:u u :c c}
-      (recur
+(defn transpose
+  "Transposes matrix"
+  [a]
+  (into [] (apply map vector a)))
+
+(defn make-matrix-from-context
+  "Converts context into binary Matrix"
+  [context]
+  (let [stringContext (clojure.string/split-lines context)]
+    (loop [i 2
+           curLine (nth (clojure.string/split (nth stringContext i) #"([|])") 1)
+           matrix (conj [] ((fn [line] (into [] (for [s line] (if (= s "x") 1 0)))) (re-seq #"\S+" curLine)))]
+      (if (<= (count stringContext) i)
+        (subvec (conj matrix ((fn [line] (into [] (for [s line] (if (= s "x") 1 0)))) (re-seq #"\S+" curLine))) 2)
+        (recur
          (inc i)
-         (cond (= (get A i) (get U i) 1) (inc c) :else c) 
-         (cond (= (get A i) (get U i) 1) (assoc u i 0) :else u)))))
+         (nth (clojure.string/split (nth stringContext i) #"([|])") 1)
+         (conj matrix ((fn [line] (into [] (for [s line] (if (= s "x") 1 0)))) (re-seq #"\S+" curLine))))))))
 
-(defn- grecond-full-match
-  "Method for checking which concept is covering how much"
-  [S U n m k]
-  (loop [i 0 u U f []]
-    (if  (<= k i)
-      {:u u :f f}
-      (recur 
-        (inc i)
-        (cond (= (* (count (nth (nth S i) 0)) (count (nth (nth S i) 1)))
-                 (:c (grecond-match (grecond-make-matrix-from-concept (nth (nth S i) 0) (nth (nth S i) 1) n m) u)))
-          (:u (grecond-match (grecond-make-matrix-from-concept (nth (nth S i) 0) (nth (nth S i) 1) n m) u)) :else u)
-        (cond (= (* (count (nth (nth S i) 0)) (count (nth (nth S i) 1)))
-                 (:c (grecond-match (grecond-make-matrix-from-concept (nth (nth S i) 0) (nth (nth S i) 1) n m) u)))
-          (conj f (nth S i)) :else f)))))
+(defn normalize-context
+  [context]
+  (make-context-from-matrix
+   (first (context-size context))
+   (second (context-size context))
+   (into [] (flatten (make-matrix-from-context (context-to-string context))))))
 
-(defn- grecond-remainder-match
-  "Method for checking which cocept coveres the most of the remainder context"
-  [S U F n m k]
-  (loop [i 0 u U f F]
-    (if (<= k i)
-      [(calc-grecond-context f n m) (make-object f n k) (make-attribute f m k)]
-      (recur 
-        (inc i)
-        (cond
-          (< 0 (:c (grecond-match (grecond-make-matrix-from-concept (nth (nth S i) 0) 
-                                                                            (nth (nth S i) 1)
-                                                                            n
-                                                                            m)
-                                              u)))
-          (:u (grecond-match (grecond-make-matrix-from-concept (nth (nth S i) 0)
-                                                                       (nth (nth S i) 1)
-                                                                       n
-                                                                       m)
-                                         u))
-          :else u)
-        (cond
-          (< 0 (:c (grecond-match (grecond-make-matrix-from-concept (nth (nth S i) 0)
-                                                                            (nth (nth S i) 1)
-                                                                            n
-                                                                            m)
-                                              u)))
-          (conj f (nth S i))
-          :else f)))))
-
+;; Creates for the grecond algorithm usable data from the conexp.fca.contexts/concepts method
 (defn- grecond-create-usable
-  "Creates for the algorithm usable data from the conexp.fca.contexts/concepts method"
   [S]
   (loop [i 0 c []]
     (if (> i (- (count S) 1))
       c
       (recur
-        (inc i)
-        (cond
-          (not= 0 (* (count (nth (nth S i) 0)) (count (nth (nth S i) 1))))
-          (conj c (nth S i))
-          :else c)))))
+       (inc i)
+       (cond
+         (not= 0 (* (count (nth (nth S i) 0)) (count (nth (nth S i) 1))))
+         (conj c (nth S i))
+         :else c)))))
 
-(defn grecond
-  "Greedy algorithm which searches for k concepts covering the most incidences."
-  [I k]
-  (let [S (reverse (sort-by (fn [[a b]] (* (count a) (count b))) (grecond-create-usable (concepts I))))
-        U (make-matrix-from-context (context-to-string I))]
-    (let [full (grecond-full-match S (into [] (apply concat U)) (count U) (count (get U 0)) k)]
-      (grecond-remainder-match (remove (set (:f full)) S) (:u full) (:f full) (count U) (count (get U 0)) k))))
+;; Unite-Operator for 2 matrices
+(defn- unite
+  [A B]
+  (loop [i 0 C []]
+    (if (>= i (count A))
+      C
+      (recur
+       (inc i)
+       (conj C (into [] (map (fn [x y] (if (or (= 1 x) (= 1 y)) 1 0)) (nth A i) (nth B i))))))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; hyper
-;; DOI 10.1007/s10618-010-0203-9
-(defn- calc-hyper-context
-  "Creates Context from hyper-algo result vectors"
-  [hyper]
-  (make-context-from-matrix  (count (nth hyper 1)) (count (nth (nth hyper 1) 0)) (into [] (flatten (nth hyper 1)))))
+(defn convert-context-to-matrix
+  [context]
+  (into [] (flatten (make-matrix-from-context (context-to-string (normalize-context context))))))
 
-(defn- make-object-helper-hyper
-  "Helper function for make-object-hyper"
+;; Helper function for make-object
+(defn- make-object-helper
   [concept m k j]
   (loop [i 0 a []]
     (if (<= m i)
       a
-      (recur 
-        (inc i)
-        (cond (some #(= i %) (get (get concept j) :g))
-              (conj a 1) :else (conj a 0))))))
-
-(defn- make-object-hyper
-  "Creates Object Factorization Context from a given Concept given by Hyper Algo"
+      (recur
+       (inc i)
+       (cond (some #(= i %) (get (nth concept j) 0))
+             (conj a 1) :else (conj a 0))))))
+             
+;; Creates Object Factorization Context from a given Concept given by various algorithms
+(defn- make-object
   [concept m k]
   (loop [i 0 out []]
     (if (<= k i)
-      (make-context-from-matrix m k (into [](flatten (apply mapv vector out))))
+      (make-context-from-matrix m k (into [] (flatten (apply mapv vector out))))
       (recur
-        (inc i) 
-        (conj out (make-object-helper-hyper concept m k i))))))
+       (inc i)
+       (conj out (make-object-helper concept m k i))))))
 
-(defn- make-attribute-hyper
-  "Creates Attribute Factorization Context from a given Concept given by Hyper Algo"
+;; Creates Attribute Factorization Context from a given Concept given by various algorithms
+(defn- make-attribute
   [concept n k]
   (loop [i 0 j 0 out []]
     (if (<= k j)
       (make-context-from-matrix k n out)
       (recur
-        (cond (>= i (- n 1)) 0 :else (inc i)) 
-        (cond (>= i (- n 1)) (inc j) :else j)
-        (cond (some #(= i %) (get (get concept j) :m))
-              (conj out 1) :else (conj out 0))))))
+       (cond (>= i (- n 1)) 0 :else (inc i))
+       (cond (>= i (- n 1)) (inc j) :else j)
+       (cond (some #(= i %) (get (nth concept j) 1))
+             (conj out 1) :else (conj out 0))))))
 
-(defn- find-hyper
-  "Finds all Hyperrectangles and calculates their Coverage in relation to the current Coverage of the Input"
+;; calculates the matrix product
+(defn calc-matrix-product
+  [object attribute k n m]
+  (let [tmp-object (make-matrix-from-context (context-to-string (normalize-context object))) tmp-attribute (make-matrix-from-context (context-to-string (normalize-context attribute)))]
+    (loop [i 0 out (repeat (* n m) 0)]
+      (if (<= k i)
+        (make-context-from-matrix n m out)
+        (recur
+         (inc i)
+         (map (fn [x y] (if (or (= 1 x) (= 1 y)) 1 0)) out (for [o (nth (transpose tmp-object) i) a (nth tmp-attribute i)] (if (and (= 1 o) (= 1 a)) 1 0))))))))
+
+;; Calculates Matrix with 2 vectors
+(defn- calc-one-matrix
+  [A B]
+  (into []
+        (let [X []]
+          (for [a A]
+            (into X (for [b B] (if (and (= a 1) (= b 1)) 1 0)))))))
+
+;; cartesian-product            
+(defn- cartesian-product
+  [a b]
+  (for [x a y b] [x y]))
+
+;; remove value from vector at index
+(defn- remove-indexed
+  [v n]
+  (into (subvec v 0 n) (subvec v (inc n))))
+
+;; counts false ones
+(defn count-false-ones
+  [V D]
+  (loop [i 0 j 0 c 0]
+    (if (>= i (count V))
+      c
+      (recur
+       (cond (> j (count (get V 0))) (inc i) :else i)
+       (cond (> j (count (get V 0))) 0 :else (inc j))
+       (cond (not= (get (get V i) j) (get (get D i) j)) (inc c) :else c)))))
+
+;; removes ones from vector
+(defn- remove-common-ones-vector
+  [A B]
+  (loop [i 0 out []]
+    (if (>= i (count A))
+      out
+      (recur
+       (inc i)
+       (if (= 1 (get A i)) (conj out 0) (conj out (get B i)))))))
+
+;; remove ones from matrix
+(defn- remove-common-ones-matrix
+  [A B]
+  (loop [i 0 out []]
+    (if (>= i (count A))
+      out
+      (recur
+       (inc i)
+       (conj out (remove-common-ones-vector (get A i) (get B i)))))))
+
+;; counts ones
+(defn count-one
+  [V]
+  (loop [i 0 c 0]
+    (if (> i (count V))
+      c
+      (recur (inc i) (cond (= (get V i) 1) (inc c) :else c)))))
+
+;; swaps the position of 2 elemnts in vector
+(defn swap-vector-position [v i1 i2]
+  (assoc v i2 (v i1) i1 (v i2)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; evaluations used
+
+(defn hamming-distance
+  [A B]
+  (count (filter #{1} (map (fn [a b] (if (not= a b) 1 0)) A B))))
+
+(defn froebeniusnorm
+  [A]
+  (Math/sqrt (count (filter #{1} A))))
+
+(defn helper-eval
+  [ext-A set-ext-B]
+  (for [B set-ext-B]
+    (double (/ (count (clojure.set/intersection ext-A B)) (count (clojure.set/union ext-A B))))))
+
+(defn bicluster-match-score
+  [A B]
+  (let [ext-A (remove nil? (for [concept-A (concepts A)] (if (and (not-empty (first concept-A)) (not-empty (second concept-A))) (first concept-A))))
+        ext-B (remove nil? (for [concept-B (concepts B)] (if (and (not-empty (first concept-B)) (not-empty (second concept-B))) (first concept-B))))]
+        (* (/ 1 (count ext-A)) (clojure.core.reducers/reduce + (for [ext-a ext-A] (apply max (helper-eval ext-a ext-B)))))))
+
+(defn jaccard-index
+  "Computes the Jaccard index of two sets. This is |x ∩ y| / |x ∪ y|.
+  Returns 1 if both sets are empty. Taken from conexp.clj"
+  [x y]
+  (if (and (empty? x) (empty? y))
+    1
+    (/ (count (intersection x y)) (count (union x y)))))
+
+(defn false-incidences
+  "Retrieves a list of incidences which are present in context B but not in A"
+  [A B]
+  (difference (incidence-relation (normalize-context B)) (incidence-relation (normalize-context A))))
+
+(defn uncovered-incidences
+  "Retrieves a list of ubcovered incidences that A holds but are not present in context B"
+  [A B]
+  (difference (incidence-relation (normalize-context A)) (incidence-relation (normalize-context B))))
+
+(defn concept-ratio
+  "Calculates the ratio of the number of concepts of the factorization context against the number of concepts of the original context"
+  [T F]
+  (double (/ F T)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; https://doi.org/10.48550/arXiv.1903.10326
+
+;; creates matrix from fiber
+(defn- make-matrix-from-fiber
+  [vector index size source-fiber]
+  (loop [i 0 out []]
+    (if (>= i size)
+      out
+      (recur
+       (inc i)
+       (if (some #(= i %) index)
+         (conj out source-fiber)
+         (conj out (vec (repeat (count (first vector)) 0))))))))
+
+;; calculates weight for given fiber
+(defn calc-weight
+  [fiber original]
+  (loop [i 0 j 0 c 0]
+    (if (>= i (count fiber))
+      c
+      (recur
+       (cond (> j (count (get fiber 0))) (inc i) :else i)
+       (cond (> j (count (get fiber 0))) 0 :else (inc j))
+       (cond (= (get (get fiber i) j) 1)
+             (cond (= (get (get original i) j) 1) (inc c) :else (dec c))
+             :else c)))))
+;; calculates the gain given the current fiber
+(defn- calc-gain
+  [vector index type original size source-fiber]
+  (let [fiber-matrix (make-matrix-from-fiber vector index size source-fiber)]
+    (if (= 1 type)
+      (hash-map :fiber vector, :index index, :type type, :gain (calc-weight fiber-matrix original), :source-fiber source-fiber)
+      (hash-map :fiber vector, :index index, :type type, :gain (calc-weight fiber-matrix (transpose original)), :source-fiber source-fiber))))
+
+;; determines wether fiber should be from row or column
+(defn- select-row-or-column
+  [rows columns]
+  (if (> (apply max rows) (apply max columns))
+    (hash-map :index (.indexOf rows (apply max rows)), :type 1) (hash-map :index (.indexOf columns (apply max columns)), :type 2)))
+
+;; calculates sum of row/column
+(defn- calc-sum
+  [vec]
+  (map #(reduce + %) vec))
+
+;; chooses fiber from context
+(defn- choose-best-single-fiber
+  [context]
+  (let [rows context columns (transpose context) best-fiber (select-row-or-column (calc-sum rows) (calc-sum columns))]
+    (if (= 1 (:type best-fiber))
+      (hash-map :fiber (nth rows (:index best-fiber)), :type (:type best-fiber) :index (:index best-fiber))
+      (hash-map :fiber (nth columns (:index best-fiber)), :type (:type best-fiber) :index (:index best-fiber)))))
+
+;; retrives simmilar fiber of given fiber
+(defn- retrieve-simmilar-fiber
+  [source-fiber context tP type]
+  (let [matrix (if (= 1 type) context (transpose context))]
+    (loop [out (hash-map :fiber [], :index [] :source-fiber source-fiber) i 0]
+      (if (>= i (count matrix))
+        out
+        (recur
+         (if (>= (/ (- (count source-fiber) (hamming-distance source-fiber (nth matrix i))) (count source-fiber)) tP)
+           (hash-map :fiber (conj (out :fiber) (nth matrix i)), :index (conj (out :index) i), :source-fiber source-fiber)
+           out)
+         (inc i))))))
+
+;; retrieves a fiber
+(defn- fiber-retrival
+  [context tP]
+  (let [best-single-fiber (choose-best-single-fiber context) type (:type best-single-fiber) fiber (retrieve-simmilar-fiber (:fiber best-single-fiber) context tP type) size (if (= 1 type) (count context) (count (first context)))]
+    (calc-gain (:fiber fiber) (:index fiber) type context size (:source-fiber fiber))))
+
+;; adds ones to a vector
+(defn- add-common-ones-vector
+  [A B]
+  (loop [i 0 out []]
+    (if (>= i (count A))
+      out
+      (recur
+       (inc i)
+       (if (= 1 (get A i)) (conj out 1) (conj out (get B i)))))))
+
+;; adds ones to a matrix
+(defn- add-common-ones-matrix
+  [A B]
+  (loop [i 0 out []]
+    (if (>= i (count A))
+      out
+      (recur
+       (inc i)
+       (conj out (add-common-ones-vector (get A i) (get B i)))))))
+
+;; removes fiber from matrix
+(defn- remove-fiber-from-matrix
+  [fiber matrix]
+  (let [index (:index fiber) full-fiber (:fiber fiber) type (:type fiber) old-matrix (if (= 1 type) matrix (transpose matrix)) size (count old-matrix) source-fiber (:source-fiber fiber)]
+    (if (= 1 type)
+      (remove-common-ones-matrix (make-matrix-from-fiber full-fiber index size source-fiber) old-matrix)
+      (transpose (remove-common-ones-matrix (make-matrix-from-fiber full-fiber index size source-fiber) old-matrix)))))
+
+;; adds fiber to matrix
+(defn- add-fiber-to-matrix
+  [fiber matrix]
+  (let [index (:index fiber) full-fiber (:fiber fiber) type (:type fiber) old-matrix (if (= 1 type) matrix (transpose matrix)) size (count old-matrix) source-fiber (:source-fiber fiber)]
+    (if (= 1 type)
+      (add-common-ones-matrix (make-matrix-from-fiber full-fiber index size source-fiber) old-matrix)
+      (transpose (add-common-ones-matrix (make-matrix-from-fiber full-fiber index size source-fiber) old-matrix)))))
+
+;; chooes the bes k fibers from context
+(defn- choose-k-best-fiber
+  [context k tP]
+  (loop [out [] i 0 matrix context excluded [] retrieved-fiber (fiber-retrival matrix tP)]
+    (if (or (>= i k))
+      {:fiber out, :cur-matrix matrix :excluded-fibers excluded}
+      (recur
+       (conj out retrieved-fiber)
+       (inc i)
+       (remove-fiber-from-matrix retrieved-fiber matrix)
+       (conj excluded {:type (:type retrieved-fiber), :index (:index retrieved-fiber)})
+       (fiber-retrival (remove-fiber-from-matrix retrieved-fiber matrix) tP)))))
+
+;; checks for fibers which are not excluded 
+(defn- check-for-non-excluded-fiber
+  [matrix excluded-fibers tP]
+  (loop [cur-matrix matrix fiber (fiber-retrival matrix tP)]
+    (if (or (nil? (some #(= {:index (:index fiber), :type (:type fiber)} %) excluded-fibers)) (nil? (some #(= 1 %) (into [] (flatten cur-matrix)))))
+      fiber
+      (recur
+       (remove-fiber-from-matrix fiber cur-matrix)
+       (fiber-retrival cur-matrix tP)))))
+
+;; replaces fiber with lower gain from out vector
+(defn- replace-lower-gain
+  [fiber-set better-fiber to-remove-index]
+  {:fiber (assoc (:fiber fiber-set) to-remove-index better-fiber),
+   :cur-matrix (remove-fiber-from-matrix better-fiber (add-fiber-to-matrix (nth (:fiber fiber-set) to-remove-index) (:cur-matrix fiber-set))),
+   :excluded-fibers (conj (:excluded-fibers fiber-set) {:index (:index better-fiber), :type (:type better-fiber)})})
+
+;; checks if there are better fibers in context
+(defn- check-for-better-fiber
+  [fiber-set search-index tP]
+  (loop [out fiber-set i 0 excluded-fibers (:excluded-fibers out) check-fiber (check-for-non-excluded-fiber (:cur-matrix out) excluded-fibers tP)]
+    (if (or (>= i search-index) (nil? (some #(= 1 %) (into [] (flatten (:cur-matrix out))))))
+      out
+      (recur
+       (if (< (:gain (apply min-key :gain (:fiber out))) (:gain check-fiber))
+         (replace-lower-gain out check-fiber (.indexOf (:fiber out) (apply min-key :gain (:fiber out))))
+         out)
+       (inc i)
+       (conj excluded-fibers (hash-map :type (:type check-fiber), :index (:index check-fiber)))
+       (check-for-non-excluded-fiber (:cur-matrix out) excluded-fibers tP)))))
+
+;; transforms fiber to concept
+(defn fiber-to-concept
+  [index type source-fiber]
+  (let [out (conj [] (set index))]
+    (loop [non-index #{} i 0]
+      (if (>= i (count source-fiber))
+        (if (= 1 type) (conj out non-index) (swap-vector-position (conj out non-index) 0 1))
+        (recur
+         (if (= 1 (get source-fiber i)) (conj non-index i) non-index)
+         (inc i))))))
+
+;; fiber search
+(defn topfiberm-fiber-search
+  [matrix k tP sR]
+  (let [search-dept (min sR (count matrix) (count (first matrix)))]
+    (if (< k search-dept)
+      (check-for-better-fiber (choose-k-best-fiber matrix k tP) (- search-dept k) tP)
+      (choose-k-best-fiber matrix k tP))))
+
+;; main function
+(defn topfiberm
+  [context k tP sR]
+  (let [matrix (make-matrix-from-context (context-to-string context))
+        n (count matrix)
+        m (count (first matrix))
+        fiber-result (topfiberm-fiber-search matrix k tP sR)
+        topfiberm-output-concepts (for [fiber (:fiber fiber-result)] (fiber-to-concept (:index fiber) (:type fiber) (:source-fiber fiber)))
+        object (make-object topfiberm-output-concepts n k)
+        attribute (make-attribute topfiberm-output-concepts m k)]
+    [(calc-matrix-product object attribute k n m) object attribute]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; https://doi.org/10.1137/1.9781611972801.15;
+
+;; creates new D matrix (base)
+(defn create-new-d
+  [C Dr]
+  (loop [i 0 A []]
+    (if (>= i (count C))
+      A
+      (recur (inc i) (conj A (into [] (map (fn [x y] (if (and (= 1 x) (= 1 y)) 0 y)) (get C i) (get Dr i))))))))
+
+;; creates panda context from algorithm result
+(defn calc-panda-context
+  "Creates Context from panda-algo result vectors"
+  [pi]
+  (loop [i 0 end (calc-one-matrix (get (nth pi i) :ci) (get (nth pi i) :ct))]
+    (if (>= i (count pi))
+      (make-context-from-matrix  (count (get (nth pi 0) :ci)) (count (get (nth pi 0) :ct)) (into [] (flatten end)))
+      (recur (inc i) (unite end (calc-one-matrix (get (nth pi i) :ci) (get (nth pi i) :ct)))))))
+
+;; sorts rows and columns
+(defn sort-items
+  [cur-D]
+  (loop [i 0 item (get cur-D 0) S (hash-map)]
+    (if (>= i (count cur-D))
+      S
+      (recur (inc i) (get cur-D (inc i)) (assoc S i (cond (nil? (get (frequencies item) 1)) 0  :else (get (frequencies item) 1)))))))
+
+;; creates new ct
+(defn create-new-ct
+  [Ct Dr]
+  (let [Cts []]
+    (into Cts
+          (for [i (range (count Ct))]
+            (if (= 0 (get Dr i)) 0 (get Ct i))))))
+
+;;calculates weight for cores
+(defn weight-core
+  [C CS sh D]
+  (let [count-ones-cs (+ (+ (count-one (get CS :ci)) (count-one (get CS :ct))) (count-false-ones (calc-one-matrix (get CS :ci) (get CS :ct)) D)) count-ones-c (+ (+ (count-one (get C :ci)) (count-one (get C :ct))) (count-false-ones (calc-one-matrix (get C :ci) (get C :ct)) D))]
+    (if (<= count-ones-cs count-ones-c) CS (update C :e conj sh))))
+
+;; calculates weight for cores
+(defn weight
+  [C CS D]
+  (let [count-onesCS (+ (+ (count-one (get CS :ci)) (count-one (get CS :ct))) (count-false-ones (calc-one-matrix (get CS :ci) (get CS :ct)) D)) count-onesC (+ (+ (count-one (get C :ci)) (count-one (get C :ct))) (count-false-ones (calc-one-matrix (get C :ci) (get C :ct)) D))]
+    (if (<= count-onesCS count-onesC) CS C)))
+
+;; helper to find cores
+(defn find-core-loop
+  [S C newD]
+  (loop [CiS (assoc (get C :ci) (get (nth S 1) 0) 1) CtS (create-new-ct (get C :ct) (get newD (get (nth S 1) 0))) CS C i 1]
+    (if (>= i (count S))
+      CS
+      (recur (assoc (get CS :ci) (get (nth S i) 0) 1) (create-new-ct (get CS :ct) (get newD (get (nth S i) 0))) (weight-core CS {:ci (assoc (get CS :ci) (get (nth S i) 0) 1) :ct (create-new-ct (get CS :ct) (get newD (get (nth S i) 0))) :e (get CS :e)} (get (nth S i) 0) newD) (inc i)))))
+
+;; finds a core and returns new D
+(defn find-core
+  [cur-D]
+  (let [S (sort-by val > (sort-items cur-D)) C {:ci (assoc (vec (repeat (count cur-D) 0)) (first (first S)) 1) :ct (get cur-D (first (first S))) :e (list)}]
+    (find-core-loop S C cur-D)))
+
+;; adds new transactions towards core
+(defn new-transactions
+  [C pi D]
+  (loop [i 0 CS C]
+    (if (<= (count (get C :ct)) i)
+      CS
+      (recur (inc i) (weight CS {:ci (get CS :ci) :ct (assoc (get CS :ct) i 1)} D)))))
+
+;; extend-cores mit rauschen
+(defn extend-core
+  [C pi D]
+  (let [E (get C :e)]
+    (loop [i 0 item (nth E 0) CS C]
+      (if (<= (count E) i)
+        CS
+        (recur (inc i) (nth E i) (new-transactions (weight CS {:ci (assoc (get CS :ci) item 1) :ct (get CS :ct)} D) pi D))))))
+
+;; creates factorization matrices from panda result
+(defn panda-factorization-matrices
+  [x n m k]
+  (loop [i 0 cio [] cto []]
+    (if (<= k i)
+      [(calc-panda-context x) (make-context-from-matrix n k (into [] (flatten (apply mapv vector cio))))  (make-context-from-matrix k m (into [] (flatten cto)))]
+      (recur (inc i) (conj cio (get (nth x i) :ci)) (conj cto (get (nth x i) :ct))))))
+
+;; panda-main
+(defn panda
+  [input k]
+  (let [D (make-matrix-from-context (context-to-string input))]
+    (loop [i 0 pi (list) cur-D D extended-core (extend-core (find-core cur-D) pi cur-D)]
+      (if (<= k i)
+        (panda-factorization-matrices pi (count (get (nth pi 0) :ci)) (count (get (nth pi 0) :ct)) k)
+        (recur 
+          (inc i) 
+          (conj pi extended-core) 
+          (create-new-d (calc-one-matrix (get extended-core :ci) (get extended-core :ct)) cur-D)
+          (extend-core (find-core (create-new-d (calc-one-matrix (get extended-core :ci) (get extended-core :ct)) cur-D)) pi (create-new-d (calc-one-matrix (get extended-core :ci) (get extended-core :ct)) cur-D)))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 10.1007/978-3-540-30214-8_22;;
+
+;; removes found tile from context
+(defn- tiling-remove-concept-from-context
+  [context concept n m]
+  (make-context-from-matrix n m (map #(if (and (= %1 1) (= %2 1)) 0 %1) (convert-context-to-matrix context) (make-matrix-from-concept (first concept) (second concept) n m))))
+
+;; searches for the currently best tile
+(defn- find-current-best-tile
+  [context]
+  (:tile-concept (apply max-key :tile
+                        (for [c (concepts context)] {:tile (reduce + (make-matrix-from-concept
+                                                                      (first c)
+                                                                      (second c)
+                                                                      (first (context-size context))
+                                                                      (second (context-size context))))
+                                                     :tile-concept c}))))
+
+;; main part of tiling algorithm
+(defn tiling-main
+  [context k n m]
+  (let [input-context (normalize-context context)]
+     (loop [i 0 out [] cur-context input-context tile (find-current-best-tile cur-context)]
+      (if (>= i k)
+        out
+        (recur
+         (inc i)
+         (conj out tile)
+         (tiling-remove-concept-from-context cur-context tile n m)
+         (find-current-best-tile (tiling-remove-concept-from-context cur-context tile n m)))))))
+
+;; tiling algorithm
+(defn tiling
+  [input-context k]
+  (let [context (make-matrix-from-context (context-to-string input-context))
+        n (count context)
+        m (count (first context))
+        tiling-result (tiling-main input-context k n m)
+        object (make-object tiling-result n k) attribute (make-attribute tiling-result m k)]
+    [(calc-matrix-product object attribute k n m) object attribute]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; https://doi.org/10.1007/s10618-010-0203-9
+
+;; calculates context from hyper result
+(defn calc-hyper-context
+  [hyper]
+  (make-context-from-matrix  (count (nth hyper 1)) (count (nth (nth hyper 1) 0)) (into [] (flatten (nth hyper 1)))))
+
+;; helper for make-object-hyper
+(defn- make-object-helper-hyper
+  "Helper function for make-object"
+  [concept m k j]
+  (loop [i 0 a []]
+    (if (<= m i)
+      a
+      (recur
+       (inc i)
+       (cond (some #(= i %) (get (get concept j) :g))
+             (conj a 1) :else (conj a 0))))))
+
+;; creates objects for hyper result
+(defn make-object-hyper
+  [concept m k]
+  (loop [i 0 out []]
+    (if (<= k i)
+      (make-context-from-matrix m k (into [] (flatten (apply mapv vector out))))
+      (recur
+       (inc i)
+       (conj out (make-object-helper-hyper concept m k i))))))
+
+;; creates attributes of hyper result
+(defn make-attribute-hyper
+  [concept n k]
+  (loop [i 0 j 0 out []]
+    (if (<= k j)
+      (make-context-from-matrix k n out)
+      (recur
+       (cond (>= i (- n 1)) 0 :else (inc i))
+       (cond (>= i (- n 1)) (inc j) :else j)
+       (cond (some #(= i %) (get (get concept j) :m)) (conj out 1) :else (conj out 0))))))
+
+;; searhces for hypers
+(defn find-hyper
   [C Coverage]
   (let [ret ()]
-    (for [c C] (conj ret {:cover (vec (for [x (mapv Coverage (sort (vec (get c 0))))]
-                                            (mapv x (sort (vec (get c 1))))))
-                          :g (vec (sort (vec (get c 0)))) 
-                          :m (vec (sort (vec (get c 1))))}))))
+    (for [c C] (conj ret {:cover (vec (for [x (mapv Coverage (sort (vec (get c 0))))] (mapv x (sort (vec (get c 1)))))) :g (vec (sort (vec (get c 0)))) :m (vec (sort (vec (get c 1))))}))))
 
-(defn- calc-cover-vector
-  "Calculates a vector with the current Coverage"
+;; calculates coverage for given vector
+(defn calc-cover-vector
   [v]
   (loop [i 0 j 0 c 0]
     (if (>= i (count v))
       c
-      (recur 
-        (cond (> j (count (first (nth v i)))) (inc i) :else i)
-        (cond (> j (count (first (nth v i)))) 0 :else (inc j))
-        (cond (= (get (first (nth v i)) j) 0) (inc c) :else c)))))
+      (recur
+       (cond (> j (count (first (nth v i)))) (inc i) :else i)
+       (cond (> j (count (first (nth v i)))) 0 :else (inc j))
+       (cond (= (get (first (nth v i)) j) 0) (inc c) :else c)))))
 
-(defn- calc-cost
-  "Calcultes the Cost of an Hyperrectangle"
+;; calculates cost for hyper
+(defn calc-cost
   [hyper]
   (let [v ()]
-    (let [sortV (sort-by first (for [x (range (count (get (first hyper) :g)))] (conj v (get (get (first hyper) :g) x)
-                                                                                       (get (get (first hyper) :cover ) x))))]
-      (loop [i 1 
-             out (try (/ (+ (count (first (first sortV))) 1) (calc-cover-vector (conj () (first sortV))))
-          (catch ArithmeticException e Integer/MAX_VALUE))
-         oldOut Integer/MAX_VALUE g (conj () (nth (first sortV) 1)) oldg ()]
+    (let [sortV (sort-by first (for [x (range (count (get (first hyper) :g)))] (conj v (get (get (first hyper) :g) x) (get (get (first hyper) :cover) x))))]
+      (loop [i 1 out
+             (try (/ (+ (count (first (first sortV))) 1) (calc-cover-vector (conj () (first sortV))))
+                  (catch ArithmeticException e Integer/MAX_VALUE))
+             oldOut Integer/MAX_VALUE g (conj () (nth (first sortV) 1)) oldg ()]
         (if (or (> out oldOut) (>= i (count sortV)))
           (if (> out oldOut)
             {:cost oldOut :g oldg :m (get (first hyper) :m)}
             {:cost out :g g :m (get (first hyper) :m)})
-          (recur 
-            (inc i)
-            (try (/ (+ (count (first (first sortV))) (inc i)) (calc-cover-vector (take (inc i) sortV))) 
-                 (catch ArithmeticException e Integer/MAX_VALUE))
-            out
-            (conj g (nth (nth sortV i) 1))
-            g))))))
+          (recur
+           (inc i)
+           (try (/ (+ (count (first (first sortV))) (inc i)) (calc-cover-vector (take (inc i) sortV))) (catch ArithmeticException e Integer/MAX_VALUE))
+           out
+           (conj g (nth (nth sortV i) 1))
+           g))))))
 
-(defn- calc-cost-list-hyper
-  "Puts together a List of all Hyperrectangles and their Cost"
+;; calculates cost for given list
+(defn calc-cost-list-hyper
   [C Coverage]
   (let [hyperList (find-hyper C Coverage) costList ()]
     (for [h hyperList] (conj costList (calc-cost h)))))
 
-(defn- calc-new-coverage-hyper
-  "Calculates the new Coverage in relation to the new Found Output Hyperrectangle"
+;; calculates new coverage for hyper
+(defn calc-new-coverage-hyper
   [C Coverage]
-  (let [X (apply min 
-                (map :cost
-                     (into [] (flatten (calc-cost-list-hyper C Coverage)))))
-        Y (into [] (flatten (calc-cost-list-hyper C Coverage)))]
+  (let [X (apply min (map :cost (into [] (flatten (calc-cost-list-hyper C Coverage))))) Y (into [] (flatten (calc-cost-list-hyper C Coverage)))]
     (loop [i 0]
       (if (= (:cost (nth Y i)) X)
         {:m (:m (nth Y i)) :g (:g (nth Y i))}
         (recur (inc i))))))
 
-(defn- create-vector
-  "Helper Function to Create a Vector from a Concept"
+;; creates a vector for hyper 
+(defn create-vector
   [v n]
   (loop [i 0 x [] c 0]
     (if (>= i n)
       x
-      (recur 
-        (inc i)
-        (cond (and  (< c (count v)) (= i (nth v c))) (conj x 1) :else (conj x 0))
-        (cond (and (< c (count v)) (= i (nth v c)) ) (inc c) :else c)))))
+      (recur (inc i) (cond
+                       (and  (< c (count v)) (= i (nth v c))) (conj x 1)
+                       :else (conj x 0))
+             (cond
+               (and (< c (count v)) (= i (nth v c))) (inc c)
+               :else c)))))
 
-(defn- calc-new-coverage-matrix-hyper
-  "Calculates the new Coverage Matrix in relation to the new Found Output Hyperrectangle"
+;; calculates new coverage matrix
+(defn calc-new-coverage-matrix-hyper
   [new Coverage n m]
-  (unite Coverage (calc-one-matrix (create-vector (into [] (sort (:g new))) m)
-                                 (create-vector (into [] (sort (:m new))) n))))
+  (unite Coverage (calc-one-matrix (create-vector (into [] (sort (:g new))) m) (create-vector (into [] (sort (:m new))) n))))
 
+;; removes element from coll
+(defn vec-remove
+  "remove elem in coll"
+  [pos coll]
+  (into (subvec coll 0 pos) (subvec coll (inc pos))))
+
+;; creates new concepts
+(defn new-concepts
+  [oldConcepts newConcept]
+  (vec-remove (.indexOf oldConcepts [(into #{} (:g newConcept)) (into #{} (:m newConcept))]) oldConcepts))
+
+;; main function
 (defn hyper
-  "Greedy algorithm, which searches for the concepts which cover the most incidences based on a weighting process."
   [Input k]
-  (let [n (count(nth (make-matrix-from-context (context-to-string Input))0))
-        m (count (make-matrix-from-context (context-to-string Input)))]
-    (loop [Output []
-           Coverage (calc-one-matrix (vec (repeat (count (objects Input)) 0)) (vec (repeat(count(attributes Input)) 0))) 
+  (let [input-context (normalize-context Input) n (count (nth (make-matrix-from-context (context-to-string input-context)) 0)) m (count (make-matrix-from-context (context-to-string input-context))) C (grecond-create-usable (concepts input-context))]
+    (loop [out []
+           coverage (calc-one-matrix (vec (repeat (count (objects input-context)) 0)) (vec (repeat (count (attributes input-context)) 0)))
            i 0 
-           C (grecond-create-usable (concepts Input))]
-        (if (>= i k)
-        [(calc-hyper-context [Output Coverage]) (make-object-hyper Output m k) (make-attribute-hyper Output n k)]
-        (recur
-          (conj Output (calc-new-coverage-hyper C Coverage))
-          (calc-new-coverage-matrix-hyper (calc-new-coverage-hyper C Coverage) Coverage n m)
+           hyper-coverage (calc-new-coverage-hyper C coverage)]
+      (if (>= i k)
+        [(calc-hyper-context [out coverage]) (make-object-hyper out m k) (make-attribute-hyper out n k)]
+        (recur 
+          (conj out hyper-coverage)
+          (calc-new-coverage-matrix-hyper hyper-coverage coverage n m)
           (inc i) 
-          C)))))
+          (calc-new-coverage-hyper C (calc-new-coverage-matrix-hyper hyper-coverage coverage n m))
+          )))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; greess
-;; https://doi.org/10.48550/arXiv.1306.4905
+;; https://doi.org/10.1016/j.jcss.2015.06.002
 
+;;"Creates Context from greess-algo result vectors"
 (defn- greess-make-matrix-from-concept
-  "Creates Context from greess-algo result vectors"
   [a b n m]
-  ;; make matrix from concept a&b with n m 
+    ;; make matrix from concept a&b with n m 
   (loop [i 0 j 0 matrix []]
     (if (> j (- m 1))
-    matrix
-      (recur 
-        (cond (>= i (- n 1)) 0 :else (inc i)) 
-        (cond (>= i (- n 1)) (inc j) :else j)
-        (cond (and (some #(= j %) a) (some #(= i %) b))
-              (conj matrix 1) :else (conj matrix 0))))))
+      matrix
+      (recur
+       (cond (>= i (- n 1)) 0 :else (inc i))
+       (cond (>= i (- n 1)) (inc j) :else j)
+       (cond (and (some #(= j %) a) (some #(= i %) b))
+             (conj matrix 1) :else (conj matrix 0))))))
 
+;; Creates Output Context from greess algo output
 (defn- calc-greess-context
-  "Creates Output Context from greess algo output"
   [F n m]
-  (loop [i 0 
+  (loop [i 0
          end (greess-make-matrix-from-concept (nth (nth F 0) 0) (nth (nth F 0) 1) n m)]
     (if (>= i (count F))
       (make-context-from-matrix m n end)
       (recur
-        (inc i)
-        (mapv (fn [x y] (if (or (= 1 x) (= 1 y)) 1 0))
-              (greess-make-matrix-from-concept (nth (nth F i) 0) (nth (nth F i) 1) n m) end)))))
+       (inc i)
+       (mapv (fn [x y] (if (or (= 1 x) (= 1 y)) 1 0))
+             (greess-make-matrix-from-concept (nth (nth F i) 0) (nth (nth F i) 1) n m) end)))))
 
-(defn- cartesian-product
-  [a b]
-  (for [x a y b] [x y]))
-
-(defn- remove-indexed
-  [v n]
-  (into (subvec v 0 n) (subvec v (inc n))))
-
+;; calculates count of overlapping concepts
 (defn- overlap
   [concepts mark]
   (for [x concepts] (count (intersection (set (cartesian-product (first x) (second x))) (set mark)))))
 
+;; calculates overlap
 (defn- overlap-mark
   [concept mark]
-  (intersection (set (cartesian-product (first concept) (second concept)))  (set mark) ))
+  (intersection (set (cartesian-product (first concept) (second concept)))  (set mark)))
 
+;; Loops over concepts to determine which should be considered a Factorization Candidate
 (defn- loop-overlaps
-  "Loops over concepts to determine which should be considered a Factorization Candidate"
   [concepts mark k n m]
-  (loop [out [] tempConcepts concepts tempMark mark i 0]
+  (loop [out [] tempConcepts concepts tempMark mark i 0 overlap-tmp (overlap tempConcepts tempMark)] 
     (if (>= i k)
-    [(calc-greess-context out m n) (make-object out n k) (make-attribute out m k)]
+      [(calc-greess-context out m n) (make-object out n k) (make-attribute out m k)]
       (recur
-        (conj out (nth tempConcepts (.indexOf (overlap tempConcepts tempMark) (apply max(overlap tempConcepts tempMark)))))
-        (remove-indexed tempConcepts (.indexOf (overlap tempConcepts tempMark) (apply max(overlap tempConcepts tempMark))))
-        (apply disj (set tempMark)
-                    (overlap-mark (nth tempConcepts (.indexOf (overlap tempConcepts tempMark)
-                                                             (apply max(overlap tempConcepts tempMark))))
-                                 tempMark))
-        (inc i)))))
+       (conj out (nth tempConcepts (.indexOf overlap-tmp (apply max overlap-tmp))))
+       (remove-indexed tempConcepts (.indexOf overlap-tmp (apply max overlap-tmp)))
+       (apply disj (set tempMark)
+              (overlap-mark (nth tempConcepts (.indexOf overlap-tmp
+                                                        (apply max overlap-tmp)))
+                            tempMark))
+       (inc i)
+       (overlap (remove-indexed tempConcepts (.indexOf overlap-tmp (apply max overlap-tmp)))
+                 (apply disj (set tempMark)
+              (overlap-mark (nth tempConcepts (.indexOf overlap-tmp
+                                                        (apply max overlap-tmp)))
+                            tempMark)))))))
 
+;; Tests wether Incidence should be marked
 (defn- test-mark
-  "Tests wether Incidence should be marked"
   [i j v greek]
-  (let [ testGreekGamma (concat (subvec (first greek) 0 i) (subvec (first greek) (inc i)))
-         testGreekDelta (concat (subvec (second greek) 0 j) (subvec (second greek) (inc j)))
-         gamma (nth (first greek) i)
-         delta (nth (second greek) j)]
-      (if (and (= 1 (nth (nth v j) i)) (nil?
-      (some #(= 1 %) (concat 
-        (for [g testGreekGamma] (if (and (subset? g gamma) (= 1 (nth (nth v j) (.indexOf (first greek) g)))) 1 0))
-        (for [d testGreekDelta] (if (and (subset? d delta) (= 1 (nth (nth v (.indexOf (second greek) d)) i))) 1 0))))))
-        [j i] nil)))
+  (let [testGreekGamma (concat (subvec (first greek) 0 i) (subvec (first greek) (inc i)))
+        testGreekDelta (concat (subvec (second greek) 0 j) (subvec (second greek) (inc j)))
+        gamma (nth (first greek) i)
+        delta (nth (second greek) j)]
+    (if (and (= 1 (nth (nth v j) i)) (nil?
+                                      (some #(= 1 %) (concat
+                                                      (for [g testGreekGamma] (if (and (subset? g gamma) (= 1 (nth (nth v j) (.indexOf (first greek) g)))) 1 0))
+                                                      (for [d testGreekDelta] (if (and (subset? d delta) (= 1 (nth (nth v (.indexOf (second greek) d)) i))) 1 0))))))
+      [j i] nil)))
 
+;; Creates List of Marked Incidences
 (defn- mark-greess
-  "Creates List of Marked Incidences"
   [v greek]
   (loop [marked [] j 0 i 0]
     (if (> (inc j) (count v))
       marked
-      (recur 
-        (conj marked (test-mark i j v greek))
-        (cond (>= (inc i) (count (nth v 0))) (inc j) :else j)
-        (cond (>= (inc i) (count (nth v 0))) 0 :else (inc i))))))
+      (recur
+       (conj marked (test-mark i j v greek))
+       (cond (>= (inc i) (count (nth v 0))) (inc j) :else j)
+       (cond (>= (inc i) (count (nth v 0))) 0 :else (inc i))))))
 
+;; Creates derivation for later use in marking progress
 (defn- calc-derivation
-  "Creates derivation for later use in marking progress"
   [Input x y]
   (loop [gamma [] i 0]
     (if (>= i (count (x Input)))
       gamma
       (recur (conj gamma (y Input #{i})) (inc i)))))
 
+;; main function
 (defn greess
-  "Greedy algorithm, which searches for essential incidences and finds concepts covering the most essential incidences."
   [Input k]
-  (let [gamma (calc-derivation Input attributes attribute-derivation)
-        mu (calc-derivation Input objects object-derivation)
-        U (make-matrix-from-context (context-to-string Input))]
-    (loop-overlaps (grecond-create-usable (concepts Input))
-                  (remove nil? (mark-greess (make-matrix-from-context (context-to-string Input)) [gamma mu]))
-                  k
-                  (count U)
-                  (count (get U 0)))))
+  (let [input-context (normalize-context Input)
+        gamma (calc-derivation input-context attributes attribute-derivation)
+        mu (calc-derivation input-context objects object-derivation)
+        U (make-matrix-from-context (context-to-string input-context))]
+    (loop-overlaps (grecond-create-usable (concepts input-context))
+                   (remove nil? (mark-greess (make-matrix-from-context (context-to-string input-context)) [gamma mu]))
+                   k
+                   (count U)
+                   (count (get U 0)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; https://doi.org/10.1016/j.jcss.2009.05.002
+
+;; weights concept
+(defn grecond-match
+  [A B]
+  (count (filter #{1} (map (fn [a b] (if (and (= a 1) (= b 1)) 1 0)) A B))))
+
+;; finds best concept
+(defn grecond-find-matching-concept
+  [input-context concept-context]
+  (nth concept-context (.indexOf (map #(grecond-match input-context %)
+                                      (map second concept-context))
+                                 (apply max (map #(grecond-match input-context %) (map second concept-context))))))
+
+;; calculates overlapping concepts
+(defn concept-intersection
+  [matched-concept remaining-concepts]
+  (remove nil? (for [x remaining-concepts] (if (= (grecond-match (second x) (second matched-concept)) 0) x))))
+
+;; main loop
+(defn grecond-loop
+  [input-context concept-context k]
+  (loop [i 0 tmp-context input-context tmp-concept concept-context factorization-concepts () grecond-matching-concept (grecond-find-matching-concept tmp-context tmp-concept)]
+    (if (>= i k)
+      factorization-concepts
+      (recur
+       (inc i)
+       (map (fn [a b] (if (and (= 1 a) (= a b)) 0 a)) tmp-context (second grecond-matching-concept))
+       (if (empty? (concept-intersection grecond-matching-concept tmp-concept)) concept-context (concept-intersection grecond-matching-concept tmp-concept))
+       (conj factorization-concepts (first grecond-matching-concept))
+       (grecond-find-matching-concept (map (fn [a b] (if (and (= 1 a) (= a b)) 0 a)) tmp-context (second grecond-matching-concept))
+                                             (if (empty? (concept-intersection grecond-matching-concept tmp-concept)) concept-context (concept-intersection grecond-matching-concept tmp-concept)))))))
+
+;; main function
+(defn grecond-main
+  [input k]
+  (let [attribute-names (sort (attributes input))
+        object-names (sort (objects input))
+        input-context (normalize-context input)
+        concepts-input (filter #(not (or (empty? (first %)) (empty? (second %)))) (concepts input-context))
+        concept-context (map vector concepts-input (into []
+                                                                   (map #(make-matrix-from-concept %1 %2
+                                                                                                   (first (context-size input-context))
+                                                                                                   (second (context-size input-context)))
+                                                                        (map first concepts-input)
+                                                                        (map second concepts-input))))]
+    (grecond-loop (convert-context-to-matrix input-context) concept-context k)))
+
+(defn grecond
+  [input k]
+  (let [grecond-result (grecond-main input k)
+        context (make-matrix-from-context (context-to-string input))
+        n (count context)
+        m (count (first context)) object (make-object grecond-result n k) attribute (make-attribute grecond-result m k)]
+    [(calc-matrix-product object attribute k n m) object attribute]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; https://doi.org/10.1109/TKDE.2008.53
+
+;; calculates association matrix
+(defn- construct-asso-matrix
+  [matrix tau]
+  (into []
+        (let [X []]
+          (for [ai matrix]
+            (into X
+                  (for [aj matrix]
+                    (if (<= tau (try (/ (reduce + (map * aj ai)) (reduce + (map * ai ai)))
+                      (catch ArithmeticException e 0)))
+                      1
+                      0)))))))
+
+;; counts false ones in matrix
+(defn- count-false-ones-asso
+  [C D]
+  (loop [i 0 j 0 c 0]
+    (if (> j (count C))
+      c
+      (recur (cond (> i (count (get C 0))) 0 :else (inc i)) (cond (> i (count (get C 0))) (inc j) :else j) (cond (and (= (get (get C i) j) 0) (= (get (get D i) j) 1)) (inc c) :else c)))))
+
+;; counts ones in matrix
+(defn- count-ones-asso
+  [C D]
+  (loop [i 0 j 0 c 0]
+    (if (> j (count C))
+      c
+      (recur (cond (> i (count (get C 0))) 0 :else (inc i)) (cond (> i (count (get C 0))) (inc j) :else j) (cond (and (= (get (get C i) j) 1) (= (get (get D i) j) 1)) (inc c) :else c)))))
+
+;; builds column for asso algorithm (this is the arbitrary column in paper)
+(defn- build-column-asso
+  [row cover-matrix wpos wneg range ]
+  (loop [column (assoc (vec (repeat range 0)) 0 1) i 0 out []]
+    (if (>= i range)
+      out
+      (recur
+        (assoc (assoc column i 0) (inc i) 1)
+        (inc i)
+        (if (< 0 (- (* wpos (count-ones-asso cover-matrix (calc-one-matrix row column)))
+                    (* wneg (count-false-ones-asso cover-matrix (calc-one-matrix row column)))
+          )) 
+          (conj out 1)
+          (conj out 0))))))
+
+;; finds best candidates for context coverage
+(defn- find-best-candidates
+  [asso-matrix cover-matrix wpos wneg range]
+  (apply max-key :weight (for [x asso-matrix] (let [asso-column (build-column-asso x cover-matrix wpos wneg range) tmp-matrix (calc-one-matrix x asso-column)]
+                                              {:asso-candidate x,
+                                               :column-candidate asso-column,
+                                               :weight (- (* wpos (count-ones-asso cover-matrix tmp-matrix)) (* wneg (count-false-ones-asso cover-matrix tmp-matrix))),
+                                               :matrix tmp-matrix}))))
+
+;; main function
+(defn asso-main
+  [matrix k tau wpos wneg]
+  (let [asso-matrix (construct-asso-matrix matrix tau) range (count (first matrix))]
+    (loop [i 0 out [] cover-matrix matrix asso-candidate (find-best-candidates asso-matrix matrix wpos wneg range)]
+      (if (>= i k)
+        out
+        (recur
+         (inc i)
+         (conj out [(:asso-candidate asso-candidate) (:column-candidate asso-candidate)])
+         (remove-common-ones-matrix (:matrix asso-candidate) cover-matrix)
+         (find-best-candidates asso-matrix (remove-common-ones-matrix (:matrix asso-candidate) cover-matrix) wpos wneg range))))))
+
+
+(defn asso
+  [input-context k tau wpos wneg]
+  (let [input-matrix (make-matrix-from-context (context-to-string input-context))
+        asso-result (asso-main input-matrix k tau wpos wneg)
+        n (count input-matrix)
+        m (count (first input-matrix))
+        object (make-context-from-matrix n k (into [] (flatten (apply mapv vector  (map first asso-result)))))
+        attribute (make-context-from-matrix k m (into [] (flatten  (map second asso-result))))]
+    [(calc-matrix-product object attribute k n m) object attribute]))
